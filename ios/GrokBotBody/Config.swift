@@ -2,18 +2,31 @@ import Foundation
 import Security
 
 enum CloudConfig {
-    static let defaultBaseURL = "https://grokbot-body.rowlinerollin.workers.dev"
     private static let overrideKey = "cloudBaseURL"
 
     static var baseURL: String {
-        let stored = UserDefaults.standard.string(forKey: overrideKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if stored.isEmpty { return defaultBaseURL }
-        return stored
+        normalizedCloudURL(UserDefaults.standard.string(forKey: overrideKey) ?? "")
+    }
+
+    static var hasCloudURL: Bool { !baseURL.isEmpty }
+
+    static func normalizedCloudURL(_ value: String) -> String {
+        var url = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        while url.hasSuffix("/") { url.removeLast() }
+        return url
+    }
+
+    static func isUsableCloudURL(_ value: String) -> Bool {
+        let url = normalizedCloudURL(value)
+        guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased() else {
+            return false
+        }
+        return scheme == "https" || scheme == "http"
     }
 
     static func setBaseURL(_ value: String) {
-        UserDefaults.standard.set(value.trimmingCharacters(in: .whitespacesAndNewlines), forKey: overrideKey)
+        let url = normalizedCloudURL(value)
+        UserDefaults.standard.set(url, forKey: overrideKey)
     }
 
     private static let listenModeKey = "listenMode"

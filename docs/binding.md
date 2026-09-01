@@ -2,10 +2,10 @@
 
 ## 一次绑好
 
-1. Worker 已部署：`https://grokbot-body.rowlinerollin.workers.dev`。
-2. iPhone 打开 GrokBot Body。绑定页云地址用上面这个（本地调试填 `http://<Mac局域网IP>:8787`）。
+1. 自己部署 Worker（见根目录 README「自己跑云」）。
+2. iPhone 打开 GrokBot Body。绑定页「云」填自己的 Worker 地址（本地调试填 `http://<Mac局域网IP>:8787`），点「保存并重连」。
 3. 屏幕下方出现 6 位配对码。十分钟内有效。
-4. 打开绑定页，复制「连接地址」（带密钥，形如 `https://<worker>/mcp/<密钥>`）。
+4. 打开绑定页，复制「连接地址」（带密钥，形如 `https://<你的worker>/mcp/<密钥>`）。
 5. Grok Bot → Settings → Plugins → Custom Connector：
    - Name: GrokBot Body
    - Server URL: 贴第 4 步那条地址，只贴一次
@@ -30,7 +30,7 @@ App 绑定页点「解绑」，或让已绑定的 Bot 调用 `unbind_body`。门
 
 没在听时，对着手机说话要能叫醒 Bot。设一次即可。
 
-电脑打开 `https://grokbot-body.rowlinerollin.workers.dev/setup`，或按手机绑定页「门铃」：
+电脑打开 `https://<你的worker>/setup`，或按手机绑定页「门铃」：
 
 1. 电脑打开这个 Bot → 自动化 → 新建。
 2. 触发选「当 webhook 响起」。
@@ -73,7 +73,7 @@ App 绑定页点「解绑」，或让已绑定的 Bot 调用 `unbind_body`。门
 
 ## MCP 能力
 
-Connector：`https://grokbot-body.rowlinerollin.workers.dev/mcp`
+Connector：绑定页复制出来的「连接地址」，不要填别人的 Worker。
 
 | 工具 | 有没有 |
 |---|---|

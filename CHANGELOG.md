@@ -33,3 +33,4 @@
 - **认领后不用记 token**：Custom Connector 改贴绑定页里那条带密钥的地址。之后工具自己找到这具身体，不再靠 Bot 记住 session_token 或岗位说明。_by Rollin&Claude_
 - **TestFlight build 9**：门铃一次设好、发晕大约两秒后自己好、Connector 带密钥后 Bot 不用记 token。_by Rollin&Claude_
 - **README 能照着绑**：根目录说明改成一次绑好、门铃、听和说、自己跑云；并推到 GitHub。_by Rollin&Claude_
+- **云地址改成手填**：App 不再默认连某一条 Worker。绑定页「云」填自己部署的地址；文档里去掉了个人云通道。_by Rollin&Claude_

@@ -187,7 +187,12 @@ struct ContentView: View {
                     )
                     .padding(.bottom, 8)
             }
-            if cloud.boundLabel == nil {
+            if !CloudConfig.hasCloudURL {
+                Text("绑定页填云地址")
+                    .font(.system(size: 15))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.bottom, 20)
+            } else if cloud.boundLabel == nil {
                 Text(cloud.pairingCode)
                     .font(.system(size: landscapeCaptionSize, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white)
@@ -266,7 +271,8 @@ struct ContentView: View {
     }
 
     private var displayExpression: String {
-        if camera.permissionDenied || !cloud.connected { return "error" }
+        if camera.permissionDenied { return "error" }
+        if !cloud.connected { return CloudConfig.hasCloudURL ? "error" : "idle" }
         if cloud.voiceState == "listen" { return "listen" }
         if cloud.voiceState == "speak" { return "speak" }
         if motion.dizzy > 0.25 { return "shake" }
@@ -282,6 +288,7 @@ struct ContentView: View {
     private var statusChip: some View {
         let text: String = {
             if camera.permissionDenied { return "需要相机" }
+            if !CloudConfig.hasCloudURL { return "未填云地址" }
             if !cloud.connected { return "未联网" }
             if holdingTalk { return "在听" }
             if motion.dizzy > 0.4 { return "发晕" }
@@ -305,9 +312,32 @@ struct ContentView: View {
     private var bindingSheet: some View {
         NavigationStack {
             Form {
+                Section("云") {
+                    TextField("https://xxx.workers.dev", text: $cloudURL)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.URL)
+                        .textContentType(.URL)
+                        .autocorrectionDisabled()
+                    Button("保存并重连") {
+                        CloudConfig.setBaseURL(cloudURL)
+                        cloudURL = CloudConfig.baseURL
+                        cloud.disconnect()
+                        if CloudConfig.hasCloudURL {
+                            cloud.connect()
+                        }
+                    }
+                    .disabled(!CloudConfig.isUsableCloudURL(cloudURL) && !cloudURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Text("填自己部署的 Worker 地址。空着不连云。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 Section("配对") {
                     LabeledContent("配对码", value: cloud.pairingCode)
-                    if let label = cloud.boundLabel {
+                    if !CloudConfig.hasCloudURL {
+                        Text("先填云地址。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else if let label = cloud.boundLabel {
                         LabeledContent("已绑定", value: label)
                         Button("解绑", role: .destructive) {
                             cloud.requestNewPairing()
@@ -477,16 +507,6 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Section("云") {
-                    TextField("地址", text: $cloudURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Button("保存并重连") {
-                        CloudConfig.setBaseURL(cloudURL)
-                        cloud.disconnect()
-                        cloud.connect()
-                    }
-                }
             }
             .navigationTitle("绑定")
             .navigationBarTitleDisplayMode(.inline)
@@ -527,7 +547,11 @@ struct ContentView: View {
             dock.startListening()
         }
         _ = await mouth.authorize()
-        cloud.connect()
+        if CloudConfig.hasCloudURL {
+            cloud.connect()
+        } else {
+            showBinding = true
+        }
     }
 
     private func applyListenMode() {

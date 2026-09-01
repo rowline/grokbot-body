@@ -31,6 +31,11 @@ final class BodyCloud: ObservableObject {
 
     func connect() {
         reconnectTask?.cancel()
+        guard CloudConfig.hasCloudURL else {
+            connected = false
+            lastError = "未填云地址"
+            return
+        }
         reconnectTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.openOnce()
@@ -52,7 +57,7 @@ final class BodyCloud: ObservableObject {
 
     func sendUtterance(_ text: String) {
         heardText = text
-        heardStatus = connected ? "已发出" : "未联网"
+        heardStatus = connected ? "已发出" : (CloudConfig.hasCloudURL ? "未联网" : "未填云地址")
         send(["type": "utterance", "text": text])
     }
 
@@ -96,10 +101,14 @@ final class BodyCloud: ObservableObject {
     }
 
     private func openOnce() async {
+        guard CloudConfig.hasCloudURL else {
+            connected = false
+            lastError = "未填云地址"
+            return
+        }
         let base = CloudConfig.baseURL
             .replacingOccurrences(of: "https://", with: "wss://")
             .replacingOccurrences(of: "http://", with: "ws://")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let urlString = "\(base)/body/\(CloudConfig.bodyId)/ws?device_secret=\(CloudConfig.deviceSecret)"
         guard let url = URL(string: urlString) else {
             lastError = "云地址无效"

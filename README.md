@@ -2,11 +2,9 @@
 
 给 Grok Bot 里**某一个 Bot** 装上的身体：iPhone + DockKit 云台 + 屏幕上的 Orb。
 
-大脑是绑定的那个 Bot。手机只做脸、耳朵（系统听写）和嘴（朗读 Bot 的话）。手机出站连 Cloudflare，运行时不需要家里的 Mac。
+大脑是绑定的那个 Bot。手机只做脸、耳朵（系统听写）和嘴（朗读 Bot 的话）。手机出站连你自己部署的 Cloudflare Worker，运行时不需要家里的 Mac。
 
-已部署的 Worker：<https://grokbot-body.rowlinerollin.workers.dev>  
-门铃 setup 页：<https://grokbot-body.rowlinerollin.workers.dev/setup>  
-iOS Bundle ID：`com.rollin.GrokBotBody`
+没有公共云通道。每人部署自己的 Worker，再在 App 绑定页「云」填那个地址。
 
 原 Funthing DIY 仓库没有改。
 
@@ -23,13 +21,33 @@ iOS Bundle ID：`com.rollin.GrokBotBody`
 
 - iPhone。云台用 Belkin DockKit（例如 Flow 2 Pro），没有云台也能听、说、换脸、拍照。
 - 能加 Custom Connector 的 Grok Bot。
-- 装 App：TestFlight，或用 Xcode 打开 `ios/GrokBotBody.xcodeproj` 装到真机。第一次允许相机、麦克风、相册。
-- 自己部署的话还要 Cloudflare 账号和 Wrangler。
+- 自己的 Cloudflare 账号，用来部署 Worker。
+- 装 App：用 Xcode 打开 `ios/GrokBotBody.xcodeproj` 装到真机，Team 换成你的 Apple ID。第一次允许相机、麦克风、相册。
+
+## 自己跑云
+
+```bash
+cd cloud
+npm install
+npm test
+npx wrangler deploy
+```
+
+记下部署后的地址，形如 `https://<worker名>.<你的子域>.workers.dev`。
+
+本地调试：
+
+```bash
+cd cloud
+npx wrangler dev
+```
+
+手机绑定页云地址填 `http://<这台 Mac 的局域网 IP>:8787`。
 
 ## 一次绑好
 
-1. iPhone 打开 GrokBot Body。绑定页云地址用 `https://grokbot-body.rowlinerollin.workers.dev`（本地调试填 `http://<Mac局域网IP>:8787`）。
-2. 屏幕下方出现 6 位配对码，十分钟内有效。绑定页复制「连接地址」（带密钥，形如 `https://<worker>/mcp/<密钥>`）。
+1. iPhone 打开 GrokBot Body。绑定页「云」填上一步的 Worker 地址，点「保存并重连」。本地调试填 `http://<Mac局域网IP>:8787`。
+2. 屏幕下方出现 6 位配对码，十分钟内有效。绑定页复制「连接地址」（带密钥，形如 `https://<你的worker>/mcp/<密钥>`）。
 3. Grok Bot → Settings → Plugins → Custom Connector：
    - Name: GrokBot Body
    - Server URL: 贴第 2 步那条地址，只贴一次
@@ -48,7 +66,7 @@ iOS Bundle ID：`com.rollin.GrokBotBody`
 
 没在听时，对着手机说话要能叫醒 Bot。设一次即可。
 
-电脑打开 <https://grokbot-body.rowlinerollin.workers.dev/setup>，或按手机绑定页「门铃」：
+电脑打开 `https://<你的worker>/setup`，或按手机绑定页「门铃」：
 
 1. 电脑打开这个 Bot → 自动化 → 新建。
 2. 触发选「当 webhook 响起」。
@@ -102,24 +120,6 @@ iOS Bundle ID：`com.rollin.GrokBotBody`
 Bot 转头、拍照、录像、跟着人时，手机屏幕会写出正在做什么。拍照会闪一下并露出缩略图；录像时左上角红点倒数。
 
 工具名和参数见 `docs/binding.md`。
-
-## 自己跑云
-
-```bash
-cd cloud
-npm install
-npm test
-npx wrangler deploy
-```
-
-本地调试：
-
-```bash
-cd cloud
-npx wrangler dev
-```
-
-手机绑定页云地址填 `http://<这台 Mac 的局域网 IP>:8787`。真机验收走已部署的 workers.dev。
 
 ## 第三方
 
