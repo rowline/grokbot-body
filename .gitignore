@@ -1,0 +1,14 @@
+.DS_Store
+.venv/
+node_modules/
+.wrangler/
+dist/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+.env
+.dev.vars
+ios/build/
+*.ipa
+*.xcarchive
+.idea/

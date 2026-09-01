@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "hardware": {
+    "screen": true,
+    "camera": true,
+    "microphone": true,
+    "speaker": true,
+    "dockkit": true
+  },
+  "expressions": [
+    "idle",
+    "listen",
+    "speak",
+    "think",
+    "happy",
+    "curious",
+    "surprised",
+    "sleepy",
+    "look",
+    "nod",
+    "shake",
+    "error",
+    "hex"
+  ],
+  "dock_actions": [
+    "turn_left",
+    "turn_right",
+    "spin",
+    "nod",
+    "shake",
+    "head_up",
+    "head_down"
+  ],
+  "tools": [
+    {
+      "name": "describe_body",
+      "kind": "read",
+      "requires_online": false,
+      "description": "Return this physical body's hardware, binding, online state, current expression, and dock status. Use this before promising an action."
+    },
+    {
+      "name": "get_status",
+      "kind": "read",
+      "requires_online": false,
+      "description": "Return connection, tracking, expression, and the last motion acknowledgement."
+    },
+    {
+      "name": "set_expression",
+      "kind": "write",
+      "requires_online": true,
+      "description": "Morph the on-screen Orb face to one expression from the body's expression list.",
+      "input": {
+        "name": "expression name from describe_body.expressions",
+        "intensity": "optional number 0 to 1",
+        "hold_ms": "optional hold time in milliseconds"
+      }
+    },
+    {
+      "name": "control_dock",
+      "kind": "write",
+      "requires_online": true,
+      "description": "Move the DockKit stand. Spoken commands on the phone already turn the stand locally; only use this tool for requests typed in this chat. Do not tell the user it finished until this tool returns succeeded.",
+      "input": {
+        "action": "one of describe_body.dock_actions"
+      }
+    },
+    {
+      "name": "set_tracking",
+      "kind": "write",
+      "requires_online": true,
+      "description": "Enable or disable DockKit face/person tracking. Tracking is on by default when the phone is docked. Spoken 跟着我 / 别跟着 on the phone already toggle it locally.",
+      "input": {
+        "enabled": "boolean"
+      }
+    },
+    {
+      "name": "get_frame",
+      "kind": "read",
+      "requires_online": true,
+      "description": "Capture one compressed JPEG from the phone camera. The image leaves the phone through this cloud for this call only."
+    },
+    {
+      "name": "record_video",
+      "kind": "write",
+      "requires_online": true,
+      "description": "Record a short MP4 from the phone camera and microphone, 1 to 12 seconds. Returns a URL. Do not say recording finished until this returns ok.",
+      "input": {
+        "duration_s": "optional seconds, default 6, max 12"
+      }
+    },
+    {
+      "name": "wait_for_speech",
+      "kind": "read",
+      "requires_online": true,
+      "description": "Wait until the person in front of the phone says something. Returns heard=true and the transcript, or heard=false if they stay silent. When heard=true, write that transcript into this chat so the conversation is visible, then reply and speak. Do not invent speech. Default 18s, max 22s. Always call this again immediately, including after heard=false, after speak, and after other body tools.",
+      "input": {
+        "timeout_ms": "optional wait time, default 18000, max 22000"
+      }
+    },
+    {
+      "name": "set_wake_hook",
+      "kind": "write",
+      "requires_online": false,
+      "description": "Register an HTTPS webhook. When the person speaks and you are not in wait_for_speech, the body POSTs JSON {event,text} so you wake. Create a webhook routine first, then pass its URL. After waking, speak your reply and wait_for_speech for the next sentence.",
+      "input": {
+        "url": "https webhook URL",
+        "secret": "optional sender key or Standard Webhooks whsec_ secret"
+      }
+    },
+    {
+      "name": "speak",
+      "kind": "write",
+      "requires_online": true,
+      "description": "Say this text out loud on the phone speaker. The phone uses a Grok voice only if the owner saved their own xAI key; otherwise the system voice. This is your mouth. Do not tell the user you spoke until the tool returns ok.",
+      "input": {
+        "text": "the words to speak"
+      }
+    }
+  ]
+}

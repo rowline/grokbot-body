@@ -1,0 +1,53 @@
+{
+  "names": [
+    "idle",
+    "listen",
+    "speak",
+    "think",
+    "happy",
+    "curious",
+    "surprised",
+    "sleepy",
+    "look",
+    "nod",
+    "shake",
+    "error",
+    "hex"
+  ],
+  "priority": [
+    "error",
+    "nod",
+    "shake",
+    "look",
+    "speak",
+    "listen",
+    "think",
+    "set_expression",
+    "sleepy",
+    "idle"
+  ],
+  "mood_map": {
+    "开心": "happy",
+    "高兴": "happy",
+    "happy": "happy",
+    "好奇": "curious",
+    "curious": "curious",
+    "惊讶": "surprised",
+    "惊喜": "surprised",
+    "surprised": "surprised",
+    "困": "sleepy",
+    "困倦": "sleepy",
+    "sleepy": "sleepy",
+    "听": "listen",
+    "listen": "listen",
+    "说": "speak",
+    "speak": "speak",
+    "想": "think",
+    "think": "think",
+    "出错": "error",
+    "error": "error",
+    "六边形": "hex",
+    "hex": "hex",
+    "感叹号": "error"
+  }
+}
