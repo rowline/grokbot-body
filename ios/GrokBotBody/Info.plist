@@ -32,6 +32,13 @@
 	<string>把你说的话交给绑定的 Bot</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>把录像存到相册</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>本机调试时连接电脑上的云服务</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -56,9 +56,23 @@ final class CameraController: ObservableObject {
             return false
         }
 
-        status = "相机已启动，等待 DockKit"
-        startRunning()
-        return true
+        let running = await waitUntilRunning()
+        isRunning = running
+        status = running ? "相机运行中，DockKit 可接入" : "相机未能启动"
+        if running { syncVideoOrientation() }
+        return running
+    }
+
+    private func waitUntilRunning() async -> Bool {
+        let captureSession = session
+        return await withCheckedContinuation { continuation in
+            sessionQueue.async {
+                if !captureSession.isRunning {
+                    captureSession.startRunning()
+                }
+                continuation.resume(returning: captureSession.isRunning)
+            }
+        }
     }
 
     private func ensureCameraAccess() async -> Bool {
@@ -154,7 +168,6 @@ final class CameraController: ObservableObject {
         }
 
         stopRequested = false
-        attachMicForRecording()
         recordWait = wait
         isRecording = true
         recordingElapsed = 0
@@ -183,9 +196,21 @@ final class CameraController: ObservableObject {
                 }
             }
         }
+        let captureSession = session
         let output = movieOutput
         let tap = movieTap
+        let needsMic = audioInput == nil
         sessionQueue.async { [weak self] in
+            if needsMic,
+               let mic = AVCaptureDevice.default(for: .audio),
+               let micInput = try? AVCaptureDeviceInput(device: mic) {
+                captureSession.beginConfiguration()
+                if captureSession.canAddInput(micInput) {
+                    captureSession.addInput(micInput)
+                    Task { @MainActor in self?.audioInput = micInput }
+                }
+                captureSession.commitConfiguration()
+            }
             output.startRecording(to: dest, recordingDelegate: tap)
             Task { @MainActor in
                 guard let self else { return }
@@ -196,40 +221,14 @@ final class CameraController: ObservableObject {
         }
     }
 
-    private func attachMicForRecording() {
-        guard audioInput == nil else { return }
-        guard let mic = AVCaptureDevice.default(for: .audio),
-              let micInput = try? AVCaptureDeviceInput(device: mic)
-        else { return }
-        session.beginConfiguration()
-        if session.canAddInput(micInput) {
-            session.addInput(micInput)
-            audioInput = micInput
-        }
-        session.commitConfiguration()
-    }
-
     private func detachMicAfterRecording() {
         guard let micInput = audioInput else { return }
-        session.beginConfiguration()
-        session.removeInput(micInput)
-        session.commitConfiguration()
         audioInput = nil
-    }
-
-    private func startRunning() {
         let captureSession = session
-        sessionQueue.async { [weak self] in
-            guard !captureSession.isRunning else { return }
-            captureSession.startRunning()
-            let running = captureSession.isRunning
-
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.isRunning = running
-                self.status = running ? "相机运行中，DockKit 可接入" : "相机未能启动"
-                self.syncVideoOrientation()
-            }
+        sessionQueue.async {
+            captureSession.beginConfiguration()
+            captureSession.removeInput(micInput)
+            captureSession.commitConfiguration()
         }
     }
 

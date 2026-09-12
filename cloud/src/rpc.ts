@@ -34,6 +34,8 @@ export type PairingRpc = {
   setActiveBody(bodyId: string): Promise<void>;
   getActiveBody(): Promise<string>;
   clearActiveBodyIf(bodyId: string): Promise<void>;
+  consumeAttempt(): Promise<{ ok: true } | { ok: false; error: string }>;
+  noteSuccess(): Promise<void>;
 };
 
 export function asBody(stub: DurableObjectStub): BodyRpc {

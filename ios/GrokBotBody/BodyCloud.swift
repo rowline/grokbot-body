@@ -30,6 +30,7 @@ final class BodyCloud: ObservableObject {
     var onCommand: (([String: Any]) async -> [String: Any])?
 
     func connect() {
+        closeSocket()
         reconnectTask?.cancel()
         guard CloudConfig.hasCloudURL else {
             connected = false
@@ -39,6 +40,7 @@ final class BodyCloud: ObservableObject {
         reconnectTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.openOnce()
+                guard !Task.isCancelled else { return }
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -46,9 +48,17 @@ final class BodyCloud: ObservableObject {
 
     func disconnect() {
         reconnectTask?.cancel()
-        pingTask?.cancel()
-        task?.cancel(with: .goingAway, reason: nil)
+        closeSocket()
         connected = false
+    }
+
+    private func closeSocket() {
+        pingTask?.cancel()
+        pingTask = nil
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        session?.invalidateAndCancel()
+        session = nil
     }
 
     func requestNewPairing() {
@@ -86,7 +96,8 @@ final class BodyCloud: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("video/mp4", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 40
+        request.setValue(CloudConfig.deviceSecret, forHTTPHeaderField: "x-device-secret")
+        request.timeoutInterval = 45
         let (data, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200,
@@ -115,9 +126,12 @@ final class BodyCloud: ObservableObject {
             return
         }
 
+        closeSocket()
+        var request = URLRequest(url: url)
+        request.setValue(CloudConfig.deviceSecret, forHTTPHeaderField: "x-device-secret")
         let session = URLSession(configuration: .default)
         self.session = session
-        let socket = session.webSocketTask(with: url)
+        let socket = session.webSocketTask(with: request)
         task = socket
         socket.resume()
         startPing()
@@ -143,7 +157,10 @@ final class BodyCloud: ObservableObject {
             lastError = "未联网"
         }
         pingTask?.cancel()
-        socket.cancel(with: .goingAway, reason: nil)
+        if task === socket {
+            socket.cancel(with: .goingAway, reason: nil)
+            if self.task === socket { self.task = nil }
+        }
     }
 
     private func startPing() {
@@ -151,7 +168,13 @@ final class BodyCloud: ObservableObject {
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
-                self?.task?.sendPing { _ in }
+                guard !Task.isCancelled else { return }
+                self?.task?.sendPing { error in
+                    guard error != nil else { return }
+                    Task { @MainActor in
+                        self?.task?.cancel(with: .goingAway, reason: nil)
+                    }
+                }
             }
         }
     }

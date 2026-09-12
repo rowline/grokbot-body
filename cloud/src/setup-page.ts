@@ -137,7 +137,12 @@ export async function handleSetupWake(
   if (!/^\d{6}$/.test(code)) {
     return Response.json({ ok: false, error: "需要 6 位码" }, { status: 400 });
   }
-  const found = await asPairing(env.PAIRING.getByName("index")).lookupBody(code);
+  const index = asPairing(env.PAIRING.getByName("index"));
+  const gated = await index.consumeAttempt();
+  if (!gated.ok) {
+    return Response.json(gated, { status: 429 });
+  }
+  const found = await index.lookupBody(code);
   if (!found) {
     return Response.json({ ok: false, error: "6 位码无效或已过期" }, { status: 400 });
   }
@@ -145,5 +150,6 @@ export async function handleSetupWake(
     String(payload.url || ""),
     String(payload.secret || ""),
   );
+  if (result.ok !== false) await index.noteSuccess();
   return Response.json(result, { status: result.ok === false ? 400 : 200 });
 }

@@ -20,7 +20,17 @@
     "nod",
     "shake",
     "error",
-    "hex"
+    "hex",
+    "excited",
+    "laugh",
+    "angry",
+    "sad",
+    "scared",
+    "suspicious",
+    "confused",
+    "proud",
+    "shy",
+    "bored"
   ],
   "dock_actions": [
     "turn_left",
@@ -111,9 +121,9 @@
       "name": "speak",
       "kind": "write",
       "requires_online": true,
-      "description": "Say this text out loud on the phone speaker. The phone uses a Grok voice only if the owner saved their own xAI key; otherwise the system voice. This is your mouth. Do not tell the user you spoke until the tool returns ok.",
+      "description": "Say one short sentence on the phone speaker, such as a task-done line. Long answers belong in the chat, not here. The phone uses a Grok voice only if the owner saved their own xAI key; otherwise the system voice. Do not tell the user you spoke until the tool returns ok.",
       "input": {
-        "text": "the words to speak"
+        "text": "one short sentence to speak"
       }
     }
   ]

@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **按住说话不再把话丢在屏幕上**：松手后识别报错不会取消提交；「嗯」也会交给 Bot。一直听可以再说同一句，识别结束后会按当前模式决定要不要再开麦。_by Rollin&Claude_
+- **点头完成后脸会回来**：动作表情只在云台还在动时显示，不再被「点头完成」卡住。_by Rollin&Claude_
+- **没人接的话写进 Durable Object**：休眠后下一次 wait_for_speech 还能拿到。配对码过期会自己换一枚并推到手机。_by Rollin&Claude_
+- **门铃和认领不能再靠猜 6 位数**：认领必须走带密钥的连接地址；猜错大约 20 次会先停几分钟。录像链接带一次性查询令牌。_by Rollin&Claude_
+- **12 秒录像不再被云端先判超时**：云端等到 90 秒。Bot 的 speak 不再裁成 24 字；任务完成出声不会挡住 Bot 再说同一句。_by Rollin&Claude_
+- **追踪字符串 false 不再被当成开**：`set_tracking` 把 `"false"` / `"0"` 当关。拍照以 MCP 图片回给 Bot，工具正文里不再带 session_token。_by Rollin&Claude_
+- **本机填 http 云地址能连上**：允许局域网明文；听写重启、WebSocket 重连、相机录像加麦改到采集队列，减少卡住和双连接。_by Rollin&Claude_
+- **TestFlight build 14**：听写不再丢话、点头后面部会回来、认领必须带密钥、录像超时放宽、speak 念全文。_by Rollin&Claude_
+- **听写不再拆 tap 闪退**：先停引擎再卸 tap，格式不合法就不装；蓝牙听写改走扬声器。相机等真正跑起来再交给 DockKit。_by Rollin&Claude_
+- **TestFlight build 15**：修按住说话 / 一直听闪退。_by Rollin&Claude_
+- **横屏字幕不再挡住按住说话**：听写原文收到左侧窄栏，文字不接点击；去掉会抢手势的滚动区。_by Rollin&Claude_
+- **重启 App 仍会开跟随**：手机已经吸在座上时，启动和回到前台会再检查并打开人脸追踪。_by Rollin&Claude_
+- **TestFlight build 16**：重启仍开跟随；横屏字幕不挡按住说话。_by Rollin&Claude_
+- **吸上云台开 app 就闪退**：`setAngularVelocity` 在系统人脸追踪开着时是 fatalError（「API violation: setting velocity only supported when system tracking disabled」），是 trap 不是抛错，`try?` 挡不住。开跟随的第一行就是它，而云台吸上时系统追踪本来就开着，于是必崩。所有动速度/动姿态的调用前都先确认追踪是关的，中途被打开就按「被打断」回报。_by Rollin&Claude_
+- **跟着人不自动开**：启动时 scenePhase 先于 boot() 变 active，DockKit 监听被建在相机跑起来之前，那条流收不到 docked，跟随就一直不开；重复 `restartListening` 还会把正要送达的 docked 事件取消掉。改成相机就绪才建流、5 秒内不重开流。绑定页把云台状态和 DockKit 明细显示出来，连不上时屏幕上能看见卡在哪一步。_by Rollin&Claude_
+- **支架没动就不再报「完成」**：动作开始前先取消排队中的「跟回去」——它会在动作执行到一半重新打开人脸追踪，云台立刻转回人脸，看上去就是没动。关不掉追踪、云台没回报执行完、动作被追踪覆盖，现在都按失败回给 Bot 和语音，不再拿「云台还吸着」当成功。`set_tracking` 同样等追踪真的打开才说好了。_by Rollin&Claude_
+
 ### Added
 
 - **GrokBot Body 新仓库**：从 Funthing DIY 只带走 DockKit 和相机，做成给某一个 Grok Bot 用的身体。屏幕换成会变形的 Orb，手机出站连 Cloudflare，不再经过家里的 Mac 网关。_by Rollin&Claude_
@@ -34,3 +53,13 @@
 - **TestFlight build 9**：门铃一次设好、发晕大约两秒后自己好、Connector 带密钥后 Bot 不用记 token。_by Rollin&Claude_
 - **README 能照着绑**：根目录说明改成一次绑好、门铃、听和说、自己跑云；并推到 GitHub。_by Rollin&Claude_
 - **云地址改成手填**：App 不再默认连某一条 Worker。绑定页「云」填自己部署的地址；文档里去掉了个人云通道。_by Rollin&Claude_
+- **脸改成 Bloub 那种**：轮廓按径向剖面变形，过渡用 ease-out，去掉弹簧。手指在屏幕上搓脸，眼睛跟着看、身体被按扁，松手再缓回来。_by Rollin&Claude_
+- **TestFlight build 10**：Bloub 脸、搓脸、云地址改手填。_by Rollin&Claude_
+- **回答不连播、长句能看完**：同一句 12 秒内不重播；屏幕上的话可滚动，不再只显示三行。_by Rollin&Claude_
+- **任务完成出声可选**：绑定页可开关。开了只说一句短的（拍好了、点头完成）；长内容写在对话框，不往外念。_by Rollin&Claude_
+- **TestFlight build 11**：不连播、长句可滑看、任务完成出声可选。_by Rollin&Claude_
+- **系统声改挑高级音色**：没开 Grok 时不再默认压缩版婷婷。自动用已下载的高级/增强中文声（雨舒、力穆优先）；绑定页可选、可试听。压缩音色会提示去系统设置下载增强或高级。_by Rollin&Claude_
+- **脸可以选形状、颜色、表情**：绑定页按 Grok Bot 那套自定义：8 种外形、12 种颜色、16 种休息脸。Bot 还能换成生气、大笑、得意这些。_by Rollin&Claude_
+- **TestFlight build 12**：系统声改挑高级/增强中文音色，绑定页可选可试听；脸可改形状、颜色、休息表情。云地址仍须自己填。_by Rollin&Claude_
+- **选脸能点着、预览能看见**：绑定页脸的形状/颜色/表情改成芯片，不再用 Form 网格和会翻页的选择器；预览放在深色底上。没联网时不再变成感叹号，休息脸还在。_by Rollin&Claude_
+- **TestFlight build 13**：绑定页选脸改成芯片，形状/颜色/表情点得着，预览放深色底；断网时不再变感叹号。_by Rollin&Claude_

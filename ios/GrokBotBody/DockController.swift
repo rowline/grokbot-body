@@ -24,7 +24,11 @@ final class DockController: ObservableObject {
 
     private var accessory: DockAccessory?
     private var listenerTask: Task<Void, Never>?
+    private var listenerStartedAt = Date.distantPast
+    private var cameraReady = false
     private var motionTask: Task<Void, Never>?
+    private var moveGeneration = 0
+    private var moveOutcome: (ok: Bool, message: String) = (false, "还没动过")
     private var soulPanOffset = 0.0
     private var soulTiltOffset = 0.0
     private let soulPanLimit = 42.0
@@ -37,6 +41,7 @@ final class DockController: ObservableObject {
         guard listenerTask == nil else { return }
 
         connected = false
+        listenerStartedAt = Date()
         status = "等云台 DockKit 连接…"
         detail = "把 iPhone 吸到 Flow 2 Pro 磁吸座，保持 app 在前台。"
 
@@ -50,6 +55,16 @@ final class DockController: ObservableObject {
                 self.status = "DockKit 出错：\(error.localizedDescription)"
                 self.detail = "如果刚拒绝了相机权限，请到系统设置里打开相机。"
             }
+        }
+    }
+
+    // 相机没真正跑起来之前，DockKit 不会报 docked。启动时 scenePhase 先于 boot() 变 active，
+    // 于是监听可能建在相机起来之前——那条流收不到 docked，跟随就一直不开。
+    func noteCameraReady() {
+        guard !cameraReady else { return }
+        cameraReady = true
+        if listenerTask != nil, !connected {
+            restartListening()
         }
     }
 
@@ -83,7 +98,9 @@ final class DockController: ObservableObject {
             status = "\(dockAccessory.identifier.name) 已连接"
             if firstDock {
                 trackingWanted = true
-                scheduleLookAtMe()
+            }
+            if trackingWanted, !tracking {
+                scheduleLookAtMe(soon: true)
             }
         case .undocked:
             wasDocked = false
@@ -149,46 +166,98 @@ final class DockController: ObservableObject {
         }
     }
 
+    private struct MoveTimeout: Error {}
+
+    // 开一个脚本动作。这里必须把排队中的"跟回去"一起取消：lookAtTask 触发的
+    // enableTrackingNow 会重新打开系统人脸追踪，云台随即把脚本动作覆盖掉——
+    // 看上去就是"没动，但报告完成"。
+    private func beginScriptedMove(named name: String) -> Int {
+        lookAtTask?.cancel()
+        lookAtTask = nil
+        motionTask?.cancel()
+        moveGeneration += 1
+        status = "正在\(name)…"
+        moveOutcome = (false, "\(name)没做完")
+        isMoving = true
+        return moveGeneration
+    }
+
+    private func recordOutcome(_ ok: Bool, _ message: String, token: Int) {
+        guard token == moveGeneration else { return }   // 已被更新的动作接管
+        moveOutcome = (ok, message)
+        status = message
+    }
+
+    private func failBeforeMoving(_ message: String) {
+        status = message
+        moveOutcome = (false, message)
+    }
+
+    // DockKit 规定：系统追踪开着时调 setAngularVelocity 会直接 fatalError
+    // （"API violation: setting velocity only supported when system tracking disabled"），
+    // 是 trap 不是抛错，try? 挡不住。所以每次动速度前都得先确认追踪是关的。
+    private func stopVelocityIfAllowed(_ accessory: DockAccessory) async {
+        guard !DockAccessoryManager.shared.isSystemTrackingEnabled else { return }
+        try? await accessory.setAngularVelocity(.zero)
+    }
+
+    // 系统人脸追踪开着时云台不听脚本指令。关不掉就别假装动过。
+    private func takeManualControl(named name: String, token: Int) async -> Bool {
+        do {
+            try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
+        } catch {
+            recordOutcome(false, "\(name)没做成：关不掉人脸追踪（\(error.localizedDescription)）", token: token)
+            return false
+        }
+        tracking = false
+        return true
+    }
+
+    // 动作跑完再看一眼：中途要是有人/有代码把系统追踪打开，云台已经把动作拉回去了。
+    private func confirmTrackingStayedOff(named name: String, token: Int) {
+        guard token == moveGeneration, moveOutcome.ok else { return }
+        if DockAccessoryManager.shared.isSystemTrackingEnabled {
+            recordOutcome(false, "\(name)被覆盖：人脸追踪中途又打开了，云台转回了人脸", token: token)
+        }
+    }
+
     private func runAnimation(_ animation: DockAccessory.Animation, named name: String, fallback: [MotionStep]) {
         guard let accessory else {
-            status = "还没连上云台"
+            failBeforeMoving("还没连上云台")
             return
         }
 
-        motionTask?.cancel()
-        status = "正在\(name)…"
-        isMoving = true
-
+        let token = beginScriptedMove(named: name)
         motionTask = Task {
-            defer { finishScriptedMove() }
+            defer { finishScriptedMove(token) }
+            guard await takeManualControl(named: name, token: token) else { return }
             do {
-                try? await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
-                tracking = false
                 let progress = try await accessory.animate(motion: animation)
-                try await waitFor(progress, timeout: 2.0)
-                status = "\(name)完成"
+                try await waitFor(progress, timeout: 6.0)
+                recordOutcome(true, "\(name)完成", token: token)
             } catch is CancellationError {
                 // Newer button tap replaced this motion.
+            } catch is MoveTimeout {
+                recordOutcome(false, "\(name)没回报完成：云台 6 秒内没执行完", token: token)
             } catch {
-                await runMotionSteps(fallback, named: name, using: accessory)
+                await runMotionSteps(fallback, named: name, using: accessory, token: token)
             }
+            confirmTrackingStayedOff(named: name, token: token)
         }
     }
 
     private func runMotion(_ steps: [MotionStep], named name: String) {
         guard let accessory else {
-            status = "还没连上云台"
+            failBeforeMoving("还没连上云台")
             return
         }
 
-        motionTask?.cancel()
-        status = "正在\(name)…"
-        isMoving = true
+        let token = beginScriptedMove(named: name)
         motionTask = Task {
-            defer { finishScriptedMove() }
-            try? await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
-            tracking = false
-            await runMotionSteps(steps, named: name, using: accessory)
+            defer { finishScriptedMove(token) }
+            guard await takeManualControl(named: name, token: token) else { return }
+            await runMotionSteps(steps, named: name, using: accessory, token: token)
+            confirmTrackingStayedOff(named: name, token: token)
         }
     }
 
@@ -270,65 +339,79 @@ final class DockController: ObservableObject {
     }
 
     func prepareForUserControl() {
+        lookAtTask?.cancel()
         motionTask?.cancel()
+        moveGeneration += 1
         resetSoulOffset()
         isMoving = false
     }
 
     private func runVelocity(_ steps: [VelocityStep], named name: String) {
         guard let accessory else {
-            status = "还没连上云台"
+            failBeforeMoving("还没连上云台")
             return
         }
 
-        motionTask?.cancel()
-        status = "正在\(name)…"
-        isMoving = true
+        let token = beginScriptedMove(named: name)
         motionTask = Task {
-            defer { finishScriptedMove() }
+            defer { finishScriptedMove(token) }
+            guard await takeManualControl(named: name, token: token) else { return }
             do {
-                try? await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
-                tracking = false
                 for step in steps {
                     try Task.checkCancellation()
+                    guard !DockAccessoryManager.shared.isSystemTrackingEnabled else {
+                        recordOutcome(false, "\(name)被打断：人脸追踪中途被打开", token: token)
+                        return
+                    }
                     try await accessory.setAngularVelocity(step.velocity)
                     try await Task.sleep(for: step.duration)
                 }
-                try await accessory.setAngularVelocity(.zero)
-                status = "\(name)完成"
+                await stopVelocityIfAllowed(accessory)
+                recordOutcome(true, "\(name)完成", token: token)
             } catch is CancellationError {
-                try? await accessory.setAngularVelocity(.zero)
+                await stopVelocityIfAllowed(accessory)
             } catch {
-                try? await accessory.setAngularVelocity(.zero)
-                status = "\(name)出错：\(error.localizedDescription)"
+                await stopVelocityIfAllowed(accessory)
+                recordOutcome(false, "\(name)出错：\(error.localizedDescription)", token: token)
             }
+            confirmTrackingStayedOff(named: name, token: token)
         }
     }
 
-    private func runMotionSteps(_ steps: [MotionStep], named name: String, using accessory: DockAccessory) async {
+    private func runMotionSteps(_ steps: [MotionStep], named name: String, using accessory: DockAccessory, token: Int) async {
         do {
             for step in steps {
                 try Task.checkCancellation()
+                guard !DockAccessoryManager.shared.isSystemTrackingEnabled else {
+                    recordOutcome(false, "\(name)被打断：人脸追踪中途被打开", token: token)
+                    return
+                }
                 let rotation = Rotation3D(angle: Angle2D(degrees: step.degrees), axis: step.axis)
                 let progress = try await accessory.setOrientation(rotation, duration: .seconds(step.duration), relative: true)
-                try await waitFor(progress, timeout: step.duration + 0.7)
+                try await waitFor(progress, timeout: max(2.0, step.duration + 0.7))
                 if step.pauseAfter > .zero {
                     try await Task.sleep(for: step.pauseAfter)
                 }
             }
-            status = "\(name)完成"
+            recordOutcome(true, "\(name)完成", token: token)
         } catch is CancellationError {
             // Newer button tap replaced this motion.
+        } catch is MoveTimeout {
+            recordOutcome(false, "\(name)没做完：云台没回报执行完", token: token)
         } catch {
-            status = "\(name)出错：\(error.localizedDescription)"
+            recordOutcome(false, "\(name)出错：\(error.localizedDescription)", token: token)
         }
     }
 
+    // 超时不是"做完了"。转不动、指令被吞掉的时候 progress 不会结束，这里要报失败。
     private func waitFor(_ progress: Progress, timeout: TimeInterval) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !progress.isFinished && !progress.isCancelled && Date() < deadline {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(40))
+        }
+        if !progress.isFinished && !progress.isCancelled {
+            throw MoveTimeout()
         }
     }
 
@@ -376,7 +459,7 @@ final class DockController: ObservableObject {
     }
 
     private func scheduleLookAtMe(soon: Bool = false) {
-        guard trackingWanted, accessory != nil else { return }
+        guard trackingWanted, accessory != nil, !isMoving else { return }
         lookAtTask?.cancel()
         lookAtTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(soon ? 120 : 450))
@@ -385,35 +468,70 @@ final class DockController: ObservableObject {
         }
     }
 
+    func ensureAttachedAndTracking() {
+        if connected {
+            if trackingWanted {
+                scheduleLookAtMe(soon: true)
+            }
+            return
+        }
+        guard cameraReady else { return }
+        if listenerTask == nil {
+            startListening()
+            return
+        }
+        // 刚建的流别再取消：restartListening 会把正要送达的 docked 事件一起取消掉。
+        guard Date().timeIntervalSince(listenerStartedAt) > 5 else { return }
+        restartListening()
+    }
+
     private func enableTrackingNow() async {
-        guard trackingWanted, let accessory, !enablingTracking else { return }
-        if tracking { return }
+        guard trackingWanted, let accessory, !enablingTracking, !isMoving else { return }
+        if tracking, DockAccessoryManager.shared.isSystemTrackingEnabled { return }
+        let token = moveGeneration
         enablingTracking = true
         defer { enablingTracking = false }
-        do {
-            try? await accessory.setAngularVelocity(.zero)
-            try await DockAccessoryManager.shared.setSystemTrackingEnabled(true)
-            try await accessory.setFramingMode(.center)
-            tracking = true
-            status = "正在看着你"
-            detail = "人脸追踪开着。人在画面里会跟。"
-        } catch {
-            tracking = false
-            status = "看着我失败：\(error.localizedDescription)"
+        var lastError: String?
+        for _ in 0..<3 {
+            do {
+                await stopVelocityIfAllowed(accessory)
+                guard token == moveGeneration, !isMoving else { return }
+                try await DockAccessoryManager.shared.setSystemTrackingEnabled(true)
+                guard token == moveGeneration, !isMoving else {
+                    try? await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
+                    return
+                }
+                try await accessory.setFramingMode(.center)
+                tracking = true
+                status = "正在看着你"
+                detail = "人脸追踪开着。人在画面里会跟。"
+                return
+            } catch {
+                lastError = error.localizedDescription
+                try? await Task.sleep(for: .milliseconds(350))
+                if !trackingWanted || self.accessory == nil || isMoving { return }
+            }
         }
+        tracking = false
+        status = "看着我失败：\(lastError ?? "未知错误")"
     }
 
     func stopMotion() {
         guard let accessory else {
-            status = "还没连上云台"
+            failBeforeMoving("还没连上云台")
             return
         }
 
+        lookAtTask?.cancel()
         motionTask?.cancel()
+        moveGeneration += 1
+        let token = moveGeneration
         motionTask = Task {
-            try? await accessory.setAngularVelocity(.zero)
+            await stopVelocityIfAllowed(accessory)
+            guard token == moveGeneration else { return }
             isMoving = false
             status = "已停止"
+            moveOutcome = (true, status)
             if trackingWanted {
                 scheduleLookAtMe()
             }
@@ -429,27 +547,43 @@ final class DockController: ObservableObject {
         ], named: "转圈")
     }
 
-    func setTrackingEnabled(_ enabled: Bool) async {
+    // 同样返回真结果：开跟随要等系统追踪真的打开，别一句"好了"就交差。
+    @discardableResult
+    func setTrackingEnabled(_ enabled: Bool) async -> (ok: Bool, message: String) {
         trackingWanted = enabled
         guard accessory != nil else {
-            status = "还没连上云台"
-            return
+            failBeforeMoving("还没连上云台")
+            return (false, status)
         }
         if enabled {
-            lookAtMe()
-            return
+            lookAtTask?.cancel()
+            lookAtTask = nil
+            await enableTrackingNow()
+            if !tracking, enablingTracking {
+                let deadline = Date().addingTimeInterval(3)
+                while enablingTracking, !tracking, Date() < deadline {
+                    try? await Task.sleep(for: .milliseconds(60))
+                }
+            }
+            return (tracking, status)
         }
+        lookAtTask?.cancel()
         motionTask?.cancel()
+        moveGeneration += 1
+        isMoving = false
         do {
             try await DockAccessoryManager.shared.setSystemTrackingEnabled(false)
             tracking = false
             status = "已停止跟随"
+            return (true, status)
         } catch {
             status = "停止跟随失败：\(error.localizedDescription)"
+            return (false, status)
         }
     }
 
-    private func finishScriptedMove() {
+    private func finishScriptedMove(_ token: Int) {
+        guard token == moveGeneration else { return }   // 更新的动作已经接管，别把它的状态清掉
         isMoving = false
         if trackingWanted {
             scheduleLookAtMe()
@@ -468,15 +602,22 @@ final class DockController: ObservableObject {
         default:
             return (false, "unknown action")
         }
-        await waitUntilIdle(timeout: 6)
-        return (connected, status)
+        // ok 说的是"这次真的转了"，不是"云台还吸着"。
+        return await waitForMoveResult(timeout: 8)
     }
 
-    private func waitUntilIdle(timeout: TimeInterval) async {
+    private func waitForMoveResult(timeout: TimeInterval) async -> (ok: Bool, message: String) {
+        let token = moveGeneration
         let deadline = Date().addingTimeInterval(timeout)
-        try? await Task.sleep(for: .milliseconds(80))
-        while isMoving && Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(80))
+        while isMoving, moveGeneration == token, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(60))
         }
+        if moveGeneration != token {
+            return (false, "被新的动作打断")
+        }
+        if isMoving {
+            return (false, "\(status)：超时没做完")
+        }
+        return moveOutcome
     }
 }

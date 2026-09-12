@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { JOB_PROMPT, MANIFEST, isDockAction, isExpression } from "./manifest";
+import { JOB_PROMPT, MANIFEST, canonicalizeExpression, isDockAction } from "./manifest";
 import { decodeWhsec, hmacSha256Base64, randomPairingCode, randomToken, secretsEqual, sha256Hex } from "./crypto";
 import { asPairing } from "./rpc";
 import { normalizeVoice } from "./tts";
@@ -19,13 +19,14 @@ const SPEECH_WAIT_DEFAULT_MS = 18_000;
 const CLIP_PART = 700_000;
 const CLIP_MAX_BYTES = 18 * 1024 * 1024;
 const CLIP_KEEP = 4;
-const CLIP_RECORD_TIMEOUT_MS = 50_000;
+const CLIP_RECORD_TIMEOUT_MS = 90_000;
 
 export class BodyDurableObject extends DurableObject<Env> {
   private pending = new Map<string, Pending>();
   private latestFrame: { jpeg: string; at: number } | null = null;
   private latestUtterance: { text: string; at: number } | null = null;
   private speechWaiters = new Map<string, Pending>();
+  private speakingText = "";
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -52,6 +53,12 @@ export class BodyDurableObject extends DurableObject<Env> {
           PRIMARY KEY (id, seq)
         )
       `);
+      this.ctx.storage.sql.exec(`
+        CREATE TABLE IF NOT EXISTS clip_token (
+          id TEXT PRIMARY KEY,
+          token TEXT NOT NULL
+        )
+      `);
     });
   }
 
@@ -62,15 +69,17 @@ export class BodyDurableObject extends DurableObject<Env> {
         return this.uploadClip(request);
       }
       if (request.method === "GET") {
+        const token = url.searchParams.get("t") || "";
         const clip = url.pathname.match(/\/clip\/([^/]+)\/([^/]+)$/);
-        if (clip) return this.serveClip(clip[2]);
+        if (clip) return this.serveClip(clip[2], token);
         const queryId = url.searchParams.get("clip_id");
-        if (queryId) return this.serveClip(queryId);
+        if (queryId) return this.serveClip(queryId, token);
       }
       return Response.json({ error: "expected websocket" }, { status: 426 });
     }
 
-    const deviceSecret = url.searchParams.get("device_secret") || "";
+    const deviceSecret =
+      url.searchParams.get("device_secret") || request.headers.get("x-device-secret") || "";
     if (!deviceSecret) {
       return Response.json({ error: "missing device_secret" }, { status: 401 });
     }
@@ -83,6 +92,13 @@ export class BodyDurableObject extends DurableObject<Env> {
       return Response.json({ error: "device rejected" }, { status: 403 });
     }
 
+    for (const extra of this.ctx.getWebSockets()) {
+      try {
+        extra.close(1000, "replaced");
+      } catch {
+        /* ignore */
+      }
+    }
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
     const code = await this.ensurePairingCode();
@@ -211,6 +227,9 @@ export class BodyDurableObject extends DurableObject<Env> {
     if (!this.online()) {
       return { ok: false, error: "身体不在线" };
     }
+    if (await this.isClaimed()) {
+      return { ok: false, error: "已经认领过了。先解绑再认领。" };
+    }
     const sessionToken = randomToken();
     this.setMeta("session_token_hash", await sha256Hex(sessionToken));
     this.setMeta("bound_label", botLabel.slice(0, 80));
@@ -222,6 +241,11 @@ export class BodyDurableObject extends DurableObject<Env> {
     this.setMeta("pairing_code", "");
     this.setMeta("pairing_expires", "0");
     await this.pairing().setActiveBody(this.bodyId());
+    try {
+      await this.ctx.storage.deleteAlarm();
+    } catch {
+      /* no alarm */
+    }
     const setupCode = await this.ensureDeskPin();
     this.notifyPhone({
       type: "bound",
@@ -266,7 +290,8 @@ export class BodyDurableObject extends DurableObject<Env> {
   }
 
   async setExpression(name: string, intensity: number, holdMs: number): Promise<Record<string, unknown>> {
-    if (!isExpression(name)) {
+    const canonical = canonicalizeExpression(name);
+    if (!canonical) {
       return { ok: false, error: "unknown expression" };
     }
     if (!this.online()) {
@@ -274,12 +299,12 @@ export class BodyDurableObject extends DurableObject<Env> {
     }
     const result = await this.commandPhone({
       type: "set_expression",
-      name,
+      name: canonical,
       intensity,
       hold_ms: holdMs,
     });
     if (result.ok) {
-      this.setMeta("expression", name);
+      this.setMeta("expression", canonical);
     }
     return result;
   }
@@ -374,7 +399,7 @@ export class BodyDurableObject extends DurableObject<Env> {
       }, wait);
       this.speechWaiters.set(id, { resolve, timer });
     });
-    if (!payload.heard) {
+    if (!payload.heard && this.speechWaiters.size === 0) {
       this.notifyPhone({ type: "voice_state", state: "idle" });
       this.setMeta("expression", "idle");
     }
@@ -389,12 +414,20 @@ export class BodyDurableObject extends DurableObject<Env> {
     if (!this.online()) {
       return { ok: false, error: "身体不在线" };
     }
+    if (this.speakingText === spoken) {
+      return { ok: true, duplicate: true };
+    }
+    this.speakingText = spoken;
     this.notifyPhone({ type: "voice_state", state: "speak" });
     this.setMeta("expression", "speak");
-    const result = await this.commandPhone({ type: "speak", text: spoken }, 40_000);
-    this.notifyPhone({ type: "voice_state", state: "idle" });
-    this.setMeta("expression", "idle");
-    return result.ok === false ? result : { ok: true };
+    try {
+      const result = await this.commandPhone({ type: "speak", text: spoken }, 40_000);
+      this.notifyPhone({ type: "voice_state", state: "idle" });
+      this.setMeta("expression", "idle");
+      return result.ok === false ? result : { ok: true };
+    } finally {
+      if (this.speakingText === spoken) this.speakingText = "";
+    }
   }
 
   async setWakeHook(url: string, secret: string): Promise<Record<string, unknown>> {
@@ -523,7 +556,29 @@ export class BodyDurableObject extends DurableObject<Env> {
     await index.register(code, this.bodyId(), expires);
     this.setMeta("pairing_code", code);
     this.setMeta("pairing_expires", String(expires));
+    try {
+      await this.ctx.storage.setAlarm(expires);
+    } catch {
+      /* alarm optional */
+    }
     return code;
+  }
+
+  async alarm(): Promise<void> {
+    if (this.getMeta("bound_label")) return;
+    const expires = Number(this.getMeta("pairing_expires") || 0);
+    if (expires && Date.now() < expires - 500) {
+      await this.ctx.storage.setAlarm(expires);
+      return;
+    }
+    const code = await this.rotatePairingCode();
+    this.notifyPhone({
+      type: "hello",
+      pairing_code: code,
+      pairing_expires_at: Number(this.getMeta("pairing_expires") || 0),
+      setup_code: code,
+      bound_bot: this.boundBot(),
+    });
   }
 
   private notifyPhone(payload: Record<string, unknown>): void {
@@ -574,11 +629,11 @@ export class BodyDurableObject extends DurableObject<Env> {
         this.speechWaiters.delete(id);
         waiter.resolve({ ok: true, heard: true, text });
       }
-      this.latestUtterance = null;
+      this.storeUtterance(null);
       this.notifyPhone({ type: "utterance_ack", text, delivered: true });
       return;
     }
-    this.latestUtterance = { text, at: Date.now() };
+    this.storeUtterance(text);
     const canWake = Boolean(this.getMeta("wake_url"));
     this.notifyPhone({
       type: "utterance_ack",
@@ -595,7 +650,7 @@ export class BodyDurableObject extends DurableObject<Env> {
     const secret = this.getMeta("wake_secret");
     const clipped = text.slice(0, 1800);
     const context =
-      `人对着身体说：「${clipped}」。把这句写进对话，立刻 wait_for_speech 核对（或就用这句），写出回答并用 speak 读出来，然后再 wait_for_speech。不要编。`;
+      `人对着身体说：「${clipped}」。把这句写进对话，立刻 wait_for_speech 核对（或就用这句），写出回答。开口最多一两句要点，长文只写对话框。然后再 wait_for_speech。不要编。`;
     const body = JSON.stringify({ context, event: "speech", text: clipped });
     const headers: Record<string, string> = { "content-type": "application/json" };
     const key = decodeWhsec(secret);
@@ -634,7 +689,7 @@ export class BodyDurableObject extends DurableObject<Env> {
 
   private async uploadClip(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const secret = url.searchParams.get("device_secret") || "";
+    const secret = url.searchParams.get("device_secret") || request.headers.get("x-device-secret") || "";
     const clipId = (url.searchParams.get("clip_id") || "").replace(/[^a-zA-Z0-9-]/g, "");
     if (!clipId || clipId.length < 8) {
       return Response.json({ error: "missing clip_id" }, { status: 400 });
@@ -657,6 +712,9 @@ export class BodyDurableObject extends DurableObject<Env> {
       this.ctx.storage.sql.exec("INSERT INTO clip_parts (id, seq, bytes) VALUES (?, ?, ?)", clipId, seq, part);
       seq += 1;
     }
+    const token = randomToken(12);
+    this.ctx.storage.sql.exec("DELETE FROM clip_token WHERE id = ?", clipId);
+    this.ctx.storage.sql.exec("INSERT INTO clip_token (id, token) VALUES (?, ?)", clipId, token);
     this.ctx.storage.sql.exec(
       "INSERT INTO clip_meta (id, mime, bytes_len, created) VALUES (?, ?, ?, ?)",
       clipId,
@@ -671,10 +729,11 @@ export class BodyDurableObject extends DurableObject<Env> {
     for (const row of extra) {
       this.ctx.storage.sql.exec("DELETE FROM clip_parts WHERE id = ?", row.id);
       this.ctx.storage.sql.exec("DELETE FROM clip_meta WHERE id = ?", row.id);
+      this.ctx.storage.sql.exec("DELETE FROM clip_token WHERE id = ?", row.id);
     }
     const publicUrl = new URL(request.url);
     publicUrl.pathname = `/clip/${this.bodyId()}/${clipId}`;
-    publicUrl.search = "";
+    publicUrl.search = `t=${token}`;
     return Response.json({
       ok: true,
       url: publicUrl.toString(),
@@ -682,8 +741,14 @@ export class BodyDurableObject extends DurableObject<Env> {
     });
   }
 
-  private serveClip(clipId: string): Response {
+  private serveClip(clipId: string, token = ""): Response {
     const id = clipId.replace(/[^a-zA-Z0-9-]/g, "");
+    const stored = this.ctx.storage.sql
+      .exec<{ token: string }>("SELECT token FROM clip_token WHERE id = ?", id)
+      .toArray()[0];
+    if (stored?.token && stored.token !== token) {
+      return Response.json({ error: "not found" }, { status: 404 });
+    }
     const meta = this.ctx.storage.sql
       .exec("SELECT mime, bytes_len FROM clip_meta WHERE id = ?", id)
       .toArray()[0] as { mime: string; bytes_len: number } | undefined;
@@ -709,10 +774,28 @@ export class BodyDurableObject extends DurableObject<Env> {
     });
   }
 
+  private storeUtterance(text: string | null): void {
+    if (!text) {
+      this.latestUtterance = null;
+      this.setMeta("utterance", "");
+      this.setMeta("utterance_at", "0");
+      return;
+    }
+    const at = Date.now();
+    this.latestUtterance = { text, at };
+    this.setMeta("utterance", text);
+    this.setMeta("utterance_at", String(at));
+  }
+
   private popUtterance(): string | null {
-    const item = this.latestUtterance;
+    let item = this.latestUtterance;
+    if (!item) {
+      const text = this.getMeta("utterance");
+      const at = Number(this.getMeta("utterance_at") || 0);
+      if (text && at) item = { text, at };
+    }
+    this.storeUtterance(null);
     if (!item) return null;
-    this.latestUtterance = null;
     if (Date.now() - item.at > UTTERANCE_TTL_MS) return null;
     return item.text;
   }

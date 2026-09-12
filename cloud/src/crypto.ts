@@ -1,5 +1,16 @@
 const encoder = new TextEncoder();
 
+export function asBool(value: unknown, fallback = false): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const n = value.trim().toLowerCase();
+    if (["false", "0", "no", "off", ""].includes(n)) return false;
+    if (["true", "1", "yes", "on"].includes(n)) return true;
+  }
+  return fallback;
+}
+
 export function randomToken(bytes = 32): string {
   const buf = new Uint8Array(bytes);
   crypto.getRandomValues(buf);

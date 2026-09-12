@@ -12,7 +12,17 @@
     "nod",
     "shake",
     "error",
-    "hex"
+    "hex",
+    "excited",
+    "laugh",
+    "angry",
+    "sad",
+    "scared",
+    "suspicious",
+    "confused",
+    "proud",
+    "shy",
+    "bored"
   ],
   "priority": [
     "error",
@@ -48,6 +58,26 @@
     "error": "error",
     "六边形": "hex",
     "hex": "hex",
-    "感叹号": "error"
+    "感叹号": "error",
+    "兴奋": "excited",
+    "excited": "excited",
+    "大笑": "laugh",
+    "laugh": "laugh",
+    "生气": "angry",
+    "angry": "angry",
+    "难过": "sad",
+    "sad": "sad",
+    "害怕": "scared",
+    "scared": "scared",
+    "怀疑": "suspicious",
+    "suspicious": "suspicious",
+    "困惑": "confused",
+    "confused": "confused",
+    "得意": "proud",
+    "proud": "proud",
+    "羞怯": "shy",
+    "shy": "shy",
+    "无趣": "bored",
+    "bored": "bored"
   }
 }

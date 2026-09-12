@@ -41,6 +41,17 @@ enum CloudConfig {
         UserDefaults.standard.set(value, forKey: listenModeKey)
     }
 
+    private static let announceTasksKey = "announceTasks"
+
+    static var announceTasks: Bool {
+        if UserDefaults.standard.object(forKey: announceTasksKey) == nil { return true }
+        return UserDefaults.standard.bool(forKey: announceTasksKey)
+    }
+
+    static func setAnnounceTasks(_ value: Bool) {
+        UserDefaults.standard.set(value, forKey: announceTasksKey)
+    }
+
     private static let faceStyleKey = "faceStyle"
 
     /// orb: Grok Bot slot-eye morph. dark: black ball with white eyes.
@@ -53,7 +64,40 @@ enum CloudConfig {
         UserDefaults.standard.set(value, forKey: faceStyleKey)
     }
 
+    private static let faceColorKey = "faceColor"
+    private static let faceShapeKey = "faceShape"
+    private static let restFaceKey = "restFace"
+
+    static var faceColor: String {
+        let stored = UserDefaults.standard.string(forKey: faceColorKey) ?? ""
+        if !stored.isEmpty { return stored }
+        return faceStyle == "dark" ? "encre" : "creme"
+    }
+
+    static func setFaceColor(_ value: String) {
+        UserDefaults.standard.set(value, forKey: faceColorKey)
+    }
+
+    static var faceShape: String {
+        let stored = UserDefaults.standard.string(forKey: faceShapeKey) ?? ""
+        return stored.isEmpty ? "cercle" : stored
+    }
+
+    static func setFaceShape(_ value: String) {
+        UserDefaults.standard.set(value, forKey: faceShapeKey)
+    }
+
+    static var restFace: String {
+        let stored = UserDefaults.standard.string(forKey: restFaceKey) ?? ""
+        return stored.isEmpty ? "idle" : stored
+    }
+
+    static func setRestFace(_ value: String) {
+        UserDefaults.standard.set(value, forKey: restFaceKey)
+    }
+
     private static let voiceIdKey = "voiceId"
+    private static let appleVoiceIdKey = "appleVoiceId"
 
     static var voiceId: String {
         let stored = UserDefaults.standard.string(forKey: voiceIdKey) ?? ""
@@ -62,6 +106,15 @@ enum CloudConfig {
 
     static func setVoiceId(_ value: String) {
         UserDefaults.standard.set(value, forKey: voiceIdKey)
+    }
+
+    /// Empty means pick the best installed zh-CN voice (premium > enhanced > Siri compact).
+    static var appleVoiceId: String {
+        UserDefaults.standard.string(forKey: appleVoiceIdKey) ?? ""
+    }
+
+    static func setAppleVoiceId(_ value: String) {
+        UserDefaults.standard.set(value, forKey: appleVoiceIdKey)
     }
 
     private static let xaiAccount = "xaiAPIKey"

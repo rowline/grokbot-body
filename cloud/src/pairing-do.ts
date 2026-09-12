@@ -110,6 +110,25 @@ export class PairingIndex extends DurableObject<Env> {
     }
   }
 
+  async consumeAttempt(): Promise<{ ok: true } | { ok: false; error: string }> {
+    const now = Date.now();
+    const windowStart = Number(this.getMeta("attempt_window") || 0);
+    let count = Number(this.getMeta("attempt_count") || 0);
+    if (now - windowStart > 10 * 60 * 1000) {
+      count = 0;
+      this.setMeta("attempt_window", String(now));
+    }
+    if (count >= 20) {
+      return { ok: false, error: "试得太勤，过几分钟再试" };
+    }
+    this.setMeta("attempt_count", String(count + 1));
+    return { ok: true };
+  }
+
+  async noteSuccess(): Promise<void> {
+    this.setMeta("attempt_count", "0");
+  }
+
   private getMeta(key: string): string {
     const row = this.ctx.storage.sql
       .exec<{ v: string }>("SELECT v FROM meta WHERE k = ?", key)

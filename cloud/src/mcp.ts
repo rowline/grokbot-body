@@ -1,3 +1,4 @@
+import { asBool } from "./crypto";
 import { JOB_PROMPT, mcpTools } from "./manifest";
 import { asBody, asPairing } from "./rpc";
 
@@ -113,8 +114,18 @@ export async function handleMcp(
       if (name !== "unbind_body" && result.next == null) {
         result.next = "wait_for_speech";
       }
+      const content: Array<Record<string, unknown>> = [
+        { type: "text", text: followupText(name, result) },
+      ];
+      if (name === "get_frame" && typeof result.jpeg_base64 === "string" && result.jpeg_base64) {
+        content.push({
+          type: "image",
+          mimeType: "image/jpeg",
+          data: result.jpeg_base64,
+        });
+      }
       return jsonRpcResult(rpc.id, {
-        content: [{ type: "text", text: followupText(name, result) }],
+        content,
         structuredContent: result,
         isError: result.ok === false,
       });
@@ -173,17 +184,24 @@ async function callTool(
   pathKey = "",
 ): Promise<Record<string, unknown>> {
   if (name === "claim_body") {
+    if (!(await hasConnectorAuth(env, request, pathKey))) {
+      return { ok: false, error: "请用绑定页里那条带密钥的连接地址认领" };
+    }
     const code = String(args.code || "").trim();
     const label = String(args.bot_label || "").trim();
     if (!/^\d{6}$/.test(code) || !label) {
       return { ok: false, error: "需要 6 位配对码和 bot_label" };
     }
-    const found = await pairingIndex(env).lookup(code);
+    const index = pairingIndex(env);
+    const gated = await index.consumeAttempt();
+    if (!gated.ok) return gated;
+    const found = await index.lookup(code);
     if (!found) {
       return { ok: false, error: "配对码无效或已过期" };
     }
     const claimed = await bodyOf(env, found.bodyId).claim(label);
     if (!claimed.ok) return claimed;
+    await index.noteSuccess();
     return {
       ...claimed,
       session_token: `${found.bodyId}.${String(claimed.session_token)}`,
@@ -212,7 +230,7 @@ async function callTool(
     case "control_dock":
       return body.controlDock(String(args.action || ""));
     case "set_tracking":
-      return body.setTracking(Boolean(args.enabled));
+      return body.setTracking(asBool(args.enabled));
     case "get_frame":
       return body.getFrame();
     case "record_video":
@@ -236,12 +254,18 @@ function followupText(name: string, result: Record<string, unknown>): string {
   }
   if (name === "wait_for_speech") {
     if (result.heard) {
-      return `人对着手机说：「${String(result.text || "")}」。先把这句原话写进对话框，再写出你的回答，并用 speak 在手机上读出来，然后立刻再 wait_for_speech。\n${json}`;
+      return `人对着手机说：「${String(result.text || "")}」。先把这句原话写进对话框，再写出你的回答。开口最多一两句要点，长文只写对话框。然后立刻再 wait_for_speech。\n${json}`;
     }
     return `这段没人说话。立刻再调用 wait_for_speech。不要往对话框写字，不要问还在吗。\n${json}`;
   }
+  if (name === "get_frame") {
+    const slim = { ok: result.ok, mime: result.mime, error: result.error, next: result.next };
+    return `拍好了。详细写在对话框，不要把报告 speak 出来。立刻 wait_for_speech。\n${JSON.stringify(slim)}`;
+  }
   if (name === "claim_body") {
-    return `认领成功。立刻 wait_for_speech。人只对着手机说话。不必记住 token。门铃按手机绑定页或电脑打开 /setup 的步骤设一次即可。\n${json}`;
+    const copy = { ...result };
+    delete copy.session_token;
+    return `认领成功。立刻 wait_for_speech。人只对着手机说话。不必记住 token。门铃按手机绑定页或电脑打开 /setup 的步骤设一次即可。\n${JSON.stringify(copy)}`;
   }
   if (name === "speak") {
     return `说完了。立刻 wait_for_speech。\n${json}`;
@@ -249,5 +273,5 @@ function followupText(name: string, result: Record<string, unknown>): string {
   if (name === "set_wake_hook") {
     return `门铃已记下。立刻 wait_for_speech。\n${json}`;
   }
-  return `做完了。立刻 wait_for_speech。人不会在对话框里打字。\n${json}`;
+  return `做完了。详细写在对话框，不要把报告 speak 出来。立刻 wait_for_speech。\n${json}`;
 }

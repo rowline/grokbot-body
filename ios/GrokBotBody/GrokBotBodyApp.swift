@@ -7,6 +7,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        let issues = BloubSkin.sanityIssues()
+        if !issues.isEmpty {
+            assertionFailure("FaceSkin sanity: \(issues.joined(separator: "; "))")
+        }
         return true
     }
 

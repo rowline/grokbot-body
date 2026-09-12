@@ -9,7 +9,7 @@ export { BodyDurableObject, PairingIndex };
 function cors(response: Response): Response {
   const headers = new Headers(response.headers);
   headers.set("Access-Control-Allow-Origin", "*");
-  headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-body-token, x-connector-key");
+  headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-body-token, x-connector-key, x-device-secret");
   headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   return new Response(response.body, { status: response.status, headers });
 }

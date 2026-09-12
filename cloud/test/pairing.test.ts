@@ -2,8 +2,8 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-async function callTool(name: string, args: Record<string, unknown>) {
-  const response = await SELF.fetch("https://example.com/mcp", {
+async function callTool(name: string, args: Record<string, unknown>, path = "/mcp") {
+  const response = await SELF.fetch(`https://example.com${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -17,6 +17,11 @@ async function callTool(name: string, args: Record<string, unknown>) {
     result: { structuredContent: Record<string, unknown>; isError?: boolean };
   };
   return body.result.structuredContent;
+}
+
+async function connectorPath() {
+  const key = await env.PAIRING.getByName("index").getConnectorKey();
+  return `/mcp/${key}`;
 }
 
 describe("binding", () => {
@@ -58,11 +63,25 @@ describe("binding", () => {
   });
 
   it("rejects a made-up pairing code", async () => {
+    const result = await callTool(
+      "claim_body",
+      {
+        code: "000000",
+        bot_label: "Desk Buddy",
+      },
+      await connectorPath(),
+    );
+    expect(result.ok).toBe(false);
+    expect(String(result.error || "")).toContain("配对码");
+  });
+
+  it("claim without the connector key is refused", async () => {
     const result = await callTool("claim_body", {
-      code: "000000",
+      code: "482193",
       bot_label: "Desk Buddy",
     });
     expect(result.ok).toBe(false);
+    expect(String(result.error || "")).toContain("密钥");
   });
 
   it("describe without a token is refused", async () => {
@@ -154,11 +173,26 @@ describe("binding", () => {
 
   it("claim then control without the phone online fails closed", async () => {
     await env.PAIRING.getByName("index").register("482193", "iphone-desk-1", Date.now() + 60_000);
-    const claimed = await callTool("claim_body", {
-      code: "482193",
-      bot_label: "Desk Buddy",
-    });
+    const claimed = await callTool(
+      "claim_body",
+      {
+        code: "482193",
+        bot_label: "Desk Buddy",
+      },
+      await connectorPath(),
+    );
     expect(claimed.ok).toBe(false);
     expect(String(claimed.error || "")).toContain("不在线");
+  });
+
+  it("rate-limits pairing and doorbell guesses", async () => {
+    const index = env.PAIRING.getByName("index");
+    await index.noteSuccess();
+    for (let i = 0; i < 20; i += 1) {
+      const allowed = await index.consumeAttempt();
+      expect(allowed.ok).toBe(true);
+    }
+    const blocked = await index.consumeAttempt();
+    expect(blocked.ok).toBe(false);
   });
 });

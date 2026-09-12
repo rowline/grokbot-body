@@ -11,8 +11,14 @@ struct ContentView: View {
     @State private var showBinding = false
     @State private var cloudURL = CloudConfig.baseURL
     @State private var listenMode = CloudConfig.listenMode
+    @State private var announceTasks = CloudConfig.announceTasks
     @State private var faceStyle = CloudConfig.faceStyle
+    @State private var faceColor = CloudConfig.faceColor
+    @State private var faceShape = CloudConfig.faceShape
+    @State private var restFace = CloudConfig.restFace
     @State private var voiceId = CloudConfig.voiceId
+    @State private var appleVoiceId = CloudConfig.appleVoiceId
+    @State private var appleVoices: [EarMouth.AppleVoiceChoice] = EarMouth.appleVoiceChoices()
     @State private var grokKeyDraft = ""
     @State private var grokKeySaved = CloudConfig.hasGrokVoice
     @State private var wakeURLDraft = CloudConfig.wakeURL
@@ -20,10 +26,13 @@ struct ContentView: View {
     @State private var wakeSaved = CloudConfig.hasWakeHook
     @State private var copiedHint = ""
     @GestureState private var holdingTalk = false
+    @State private var faceTouch: CGPoint?
     @State private var holdReset: Task<Void, Never>?
     @State private var activityClear: Task<Void, Never>?
+    @State private var missHearTask: Task<Void, Never>?
     @State private var flash = false
     @State private var snapshot: UIImage?
+    @Environment(\.scenePhase) private var scenePhase
     private let frameQueue = DispatchQueue(label: "GrokBotBody.frames")
 
     var body: some View {
@@ -38,11 +47,14 @@ struct ContentView: View {
                     expression: displayExpression,
                     size: orbSize,
                     style: faceStyle,
-                    motion: motion
+                    color: faceColor,
+                    shape: faceShape,
+                    rest: restFace,
+                    motion: motion,
+                    touch: faceTouch
                 )
-                    .scaleEffect(holdingTalk ? 0.96 : 1)
+                    .scaleEffect(holdingTalk && faceTouch == nil ? 0.96 : 1)
                     .gesture(talkGesture)
-                    .animation(.easeOut(duration: 0.12), value: holdingTalk)
 
                 Color.white.opacity(flash ? 0.55 : 0)
                     .ignoresSafeArea()
@@ -68,7 +80,10 @@ struct ContentView: View {
                     .allowsHitTesting(false)
                 }
 
-                chromeOverlay(landscape: landscape)
+                chromeOverlay(
+                    landscape: landscape,
+                    sideGutter: max(120, (proxy.size.width - orbSize) / 2 - 8)
+                )
             }
         }
         .statusBarHidden()
@@ -77,12 +92,18 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showBinding) {
             bindingSheet
+                .onAppear { appleVoices = EarMouth.appleVoiceChoices() }
         }
         .task {
             motion.start()
             await boot()
         }
         .onDisappear { motion.stop() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                dock.ensureAttachedAndTracking()
+            }
+        }
         .onChange(of: dock.connected) { _, _ in pushStatus() }
         .onChange(of: cloud.connected) { _, ok in
             if ok {
@@ -97,12 +118,27 @@ struct ContentView: View {
             CloudConfig.setListenMode(mode)
             applyListenMode()
         }
+        .onChange(of: announceTasks) { _, on in
+            CloudConfig.setAnnounceTasks(on)
+        }
         .onChange(of: faceStyle) { _, style in
             CloudConfig.setFaceStyle(style)
+        }
+        .onChange(of: faceColor) { _, color in
+            CloudConfig.setFaceColor(color)
+        }
+        .onChange(of: faceShape) { _, shape in
+            CloudConfig.setFaceShape(shape)
+        }
+        .onChange(of: restFace) { _, face in
+            CloudConfig.setRestFace(face)
         }
         .onChange(of: voiceId) { _, id in
             CloudConfig.setVoiceId(id)
             pushStatus()
+        }
+        .onChange(of: appleVoiceId) { _, id in
+            CloudConfig.setAppleVoiceId(id)
         }
         .onChange(of: cloud.boundLabel) { _, _ in
             applyListenMode()
@@ -118,14 +154,17 @@ struct ContentView: View {
             }
             guard listenMode == "hold", cloud.boundLabel != nil else { return }
             if holding {
+                missHearTask?.cancel()
                 cloud.heardText = ""
                 cloud.heardStatus = "在听"
                 mouth.beginTalk()
                 cloud.voiceState = "listen"
             } else {
                 mouth.endTalk()
-                Task {
-                    try? await Task.sleep(for: .milliseconds(550))
+                missHearTask?.cancel()
+                missHearTask = Task {
+                    try? await Task.sleep(for: .milliseconds(700))
+                    guard !Task.isCancelled else { return }
                     if cloud.heardText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         cloud.heardStatus = "没听清"
                     }
@@ -144,28 +183,32 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func chromeOverlay(landscape: Bool) -> some View {
+    private func chromeOverlay(landscape: Bool, sideGutter: CGFloat) -> some View {
         if landscape {
-            HStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 10) {
                     statusChip
-                    Spacer()
-                    captionBlock(alignment: .leading)
+                    Spacer(minLength: 0)
+                    captionBlock(alignment: .leading, compact: true)
                 }
-                Spacer()
+                .frame(width: sideGutter, alignment: .leading)
+                .allowsHitTesting(false)
+                Spacer(minLength: 0)
                 bindButton
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
         } else {
             VStack {
                 HStack {
                     statusChip
+                        .allowsHitTesting(false)
                     Spacer()
                     bindButton
                 }
                 Spacer()
-                captionBlock(alignment: .center)
+                captionBlock(alignment: .center, compact: false)
+                    .allowsHitTesting(false)
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -173,13 +216,13 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func captionBlock(alignment: HorizontalAlignment) -> some View {
+    private func captionBlock(alignment: HorizontalAlignment, compact: Bool) -> some View {
         VStack(alignment: alignment, spacing: 4) {
             if let snapshot {
                 Image(uiImage: snapshot)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: 72, height: 96)
+                    .frame(width: compact ? 56 : 72, height: compact ? 74 : 96)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -194,8 +237,10 @@ struct ContentView: View {
                     .padding(.bottom, 20)
             } else if cloud.boundLabel == nil {
                 Text(cloud.pairingCode)
-                    .font(.system(size: landscapeCaptionSize, weight: .medium, design: .monospaced))
+                    .font(.system(size: compact ? 22 : 28, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
                 Text(holdHint)
                     .font(.system(size: 13))
                     .foregroundStyle(.white.opacity(0.45))
@@ -204,12 +249,17 @@ struct ContentView: View {
                 Text(cloud.boundLabel ?? "")
                     .font(.system(size: 15))
                     .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
                 if !cloud.heardText.isEmpty {
                     Text(cloud.heardText)
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.system(size: compact ? 15 : 17, weight: .medium))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(alignment == .leading ? .leading : .center)
-                        .lineLimit(3)
+                        .lineLimit(compact ? 6 : 8)
+                        .frame(
+                            maxWidth: .infinity,
+                            alignment: alignment == .leading ? .leading : .center
+                        )
                 }
                 if !cloud.heardStatus.isEmpty {
                     Text(cloud.heardStatus)
@@ -227,9 +277,9 @@ struct ContentView: View {
                     .padding(.bottom, 20)
             }
         }
+        .frame(maxWidth: .infinity, alignment: alignment == .leading ? .leading : .center)
+        .allowsHitTesting(false)
     }
-
-    private var landscapeCaptionSize: CGFloat { 36 }
 
     private static let wakeRoutineText =
         "身体有人说话了。立刻 wait_for_speech。把听到的原话写进对话框，用 speak 在手机上读出回答，然后再听。不要编。"
@@ -247,6 +297,18 @@ struct ContentView: View {
     private func copyText(_ text: String, label: String) {
         UIPasteboard.general.string = text
         copiedHint = "已复制 · \(label)"
+    }
+
+    private func announceDone(_ phrase: String) {
+        guard CloudConfig.announceTasks else { return }
+        Task {
+            await mouth.speak(
+                phrase,
+                apiKey: CloudConfig.xaiAPIKey,
+                voiceId: CloudConfig.voiceId,
+                remember: false
+            )
+        }
     }
 
     private var holdHint: String {
@@ -268,20 +330,26 @@ struct ContentView: View {
                 guard listenMode == "hold", cloud.boundLabel != nil else { return }
                 state = true
             }
+            .onChanged { value in
+                faceTouch = value.location
+            }
+            .onEnded { _ in
+                faceTouch = nil
+            }
     }
 
     private var displayExpression: String {
         if camera.permissionDenied { return "error" }
-        if !cloud.connected { return CloudConfig.hasCloudURL ? "error" : "idle" }
         if cloud.voiceState == "listen" { return "listen" }
         if cloud.voiceState == "speak" { return "speak" }
         if motion.dizzy > 0.25 { return "shake" }
         if motion.shaking { return "surprised" }
-        if dock.isMoving { return "look" }
-        if dock.status.contains("点头") { return "nod" }
-        if dock.status.contains("摇头") { return "shake" }
-        if dock.status.contains("左转") || dock.status.contains("右转") || dock.status.contains("转圈") { return "look" }
-        if dock.tracking { return "curious" }
+        if dock.isMoving {
+            if dock.status.contains("点头") { return "nod" }
+            if dock.status.contains("摇头") { return "shake" }
+            if dock.status.contains("低头") { return "sleepy" }
+            return "look"
+        }
         return cloud.expression
     }
 
@@ -377,16 +445,13 @@ struct ContentView: View {
                     }
                 }
                 Section("脸") {
-                    Picker("脸", selection: $faceStyle) {
-                        Text("Orb").tag("orb")
-                        Text("暗球").tag("dark")
-                    }
-                    .pickerStyle(.segmented)
-                    Text(faceStyle == "orb"
-                         ? "思考绕彩带，出错变感叹号，还能变成六边形。"
-                         : "黑球白眼。思考、出错、六边形同一套变形。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    FaceChooser(
+                        color: $faceColor,
+                        shape: $faceShape,
+                        rest: $restFace,
+                        style: $faceStyle,
+                        motion: motion
+                    )
                 }
                 Section("听") {
                     Picker("听", selection: $listenMode) {
@@ -403,6 +468,10 @@ struct ContentView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Text("认领后应自己循环听。一次大约 18 秒，没人说话也要马上再听。屏幕若显示已记下，是这一回合停了。门铃设好后可再叫醒。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Toggle("任务完成出声", isOn: $announceTasks)
+                    Text("拍完、转完只说一句短的。长内容写在对话框，不往外念。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -484,7 +553,27 @@ struct ContentView: View {
                             grokKeySaved = CloudConfig.hasGrokVoice
                         }
                         .disabled(grokKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        Text("不填就用系统声。Grok 官方音色必须有自己的 xAI 密钥，没有别的办法。")
+                        Text("不填就用系统声。Grok 官方音色必须有自己的 xAI 密钥。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Picker("系统声", selection: $appleVoiceId) {
+                        Text("自动").tag("")
+                        ForEach(appleVoices) { voice in
+                            Text(voice.label).tag(voice.identifier)
+                        }
+                    }
+                    Button("试听系统声") {
+                        Task { await mouth.previewAppleVoice() }
+                    }
+                    if EarMouth.usingCompactAppleVoice(appleVoiceId) {
+                        Text("现在是压缩音色，听着机械。去设置 → 辅助功能 → 朗读内容 → 声音 → 中文，下载增强或高级。雨舒、力穆比婷婷自然。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(grokKeySaved
+                             ? "Grok 调不通时退回这副系统声。"
+                             : "没开 Grok 时用这副声。高级、增强要先在系统设置里下载。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -494,6 +583,14 @@ struct ContentView: View {
                     LabeledContent("换脸", value: "有")
                     LabeledContent("转头点头", value: "有")
                     LabeledContent("跟着人", value: dock.tracking ? "开着" : "关着")
+                    LabeledContent("云台", value: dock.connected ? "已吸附" : "没吸上")
+                    Text(dock.status)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text(dock.detail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
                     LabeledContent("拍一张", value: cloud.allowFrame ? "开着" : "关着")
                     LabeledContent("录像", value: cloud.allowVideo ? "最长 12 秒" : "关着")
                     Text("吸上云台默认跟着脸。对着手机说左转、点头、跟着我，支架当场动，不等 Bot。")
@@ -516,7 +613,8 @@ struct ContentView: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large, .medium])
+        .presentationDragIndicator(.visible)
     }
 
     private func boot() async {
@@ -544,7 +642,14 @@ struct ContentView: View {
         }
         let cameraReady = await camera.start()
         if cameraReady {
+            dock.noteCameraReady()
             dock.startListening()
+            Task {
+                try? await Task.sleep(for: .milliseconds(900))
+                dock.ensureAttachedAndTracking()
+                try? await Task.sleep(for: .seconds(6))
+                dock.ensureAttachedAndTracking()
+            }
         }
         _ = await mouth.authorize()
         if CloudConfig.hasCloudURL {
@@ -586,6 +691,7 @@ struct ContentView: View {
             let fileURL = try await camera.recordUntilStopped()
             try await PhotoSaver.saveVideo(at: fileURL)
             showActivity("已存到相册")
+            announceDone("已存到相册")
             try? FileManager.default.removeItem(at: fileURL)
         } catch {
             showActivity(error.localizedDescription)
@@ -612,20 +718,24 @@ struct ContentView: View {
             showActivity(labels.doing)
             let result = await dock.performAction(action)
             if result.ok {
-                cloud.expression = expressionForDock(action)
                 showActivity(labels.done)
+                announceDone(labels.done)
             } else {
                 showActivity(result.message)
             }
         case .tracking(let enabled):
-            showActivity(enabled ? "开始跟着你" : "停止跟随", sticky: enabled)
-            await dock.setTrackingEnabled(enabled)
-            if !dock.connected {
-                showActivity("还没连上云台")
+            let line = enabled ? "开始跟着你" : "停止跟随"
+            showActivity(line, sticky: enabled)
+            let result = await dock.setTrackingEnabled(enabled)
+            if result.ok {
+                announceDone(line)
+            } else {
+                showActivity(result.message)
             }
         case .stop:
             dock.stopMotion()
             showActivity("已停下")
+            announceDone("已停下")
         }
     }
 
@@ -648,7 +758,7 @@ struct ContentView: View {
         let type = json["type"] as? String ?? ""
         switch type {
         case "set_expression":
-            let name = json["name"] as? String ?? "idle"
+            let name = Bloub.canonicalExpression(json["name"] as? String ?? "idle")
             cloud.expression = name
             showActivity(name == "idle" ? "恢复待机" : "换脸")
             let hold = (json["hold_ms"] as? Double) ?? 1800
@@ -666,20 +776,23 @@ struct ContentView: View {
             showActivity(labels.doing)
             let result = await dock.performAction(action)
             if result.ok {
-                cloud.expression = expressionForDock(action)
                 showActivity(labels.done)
+                announceDone(labels.done)
             } else {
                 showActivity(result.message)
             }
             return ["type": "ack", "ok": result.ok, "message": result.message]
         case "set_tracking":
             let enabled = json["enabled"] as? Bool ?? false
-            showActivity(enabled ? "开始跟着你" : "停止跟随", sticky: enabled)
-            await dock.setTrackingEnabled(enabled)
-            if !dock.connected {
-                showActivity("还没连上云台")
+            let line = enabled ? "开始跟着你" : "停止跟随"
+            showActivity(line, sticky: enabled)
+            let result = await dock.setTrackingEnabled(enabled)
+            if result.ok {
+                announceDone(line)
+            } else {
+                showActivity(result.message)
             }
-            return ["type": "ack", "ok": dock.connected, "message": dock.status]
+            return ["type": "ack", "ok": result.ok, "message": result.message]
         case "get_frame":
             guard cloud.allowFrame, let data = grabber.jpegData, let jpeg = grabber.jpegBase64 else {
                 showActivity("没有画面")
@@ -687,7 +800,8 @@ struct ContentView: View {
             }
             flash = true
             snapshot = UIImage(data: data)
-            showActivity("拍了一张")
+            showActivity("拍好了")
+            announceDone("拍好了")
             Task {
                 try? await Task.sleep(for: .milliseconds(180))
                 flash = false
@@ -712,8 +826,9 @@ struct ContentView: View {
                 showActivity("正在上传")
                 let uploaded = try await cloud.uploadClip(fileURL: fileURL, clipId: clipId)
                 try? FileManager.default.removeItem(at: fileURL)
-                showActivity("录像完成")
-                if listenMode == "always", cloud.boundLabel != nil {
+                showActivity("录像好了")
+                announceDone("录像好了")
+                if CloudConfig.listenMode == "always", cloud.boundLabel != nil {
                     mouth.startListening()
                 }
                 return [
@@ -725,7 +840,7 @@ struct ContentView: View {
                 ]
             } catch {
                 showActivity("录像失败")
-                if listenMode == "always", cloud.boundLabel != nil {
+                if CloudConfig.listenMode == "always", cloud.boundLabel != nil {
                     mouth.startListening()
                 }
                 return ["type": "ack", "ok": false, "error": error.localizedDescription]
@@ -736,9 +851,11 @@ struct ContentView: View {
             cloud.heardText = text
             cloud.heardStatus = "在说"
             let audio: Data? = (json["audio_base64"] as? String).flatMap { Data(base64Encoded: $0) }
-            await mouth.speak(text, audio: audio, apiKey: CloudConfig.xaiAPIKey, voiceId: voiceId)
-            if listenMode != "always" {
+            await mouth.speak(text, audio: audio, apiKey: CloudConfig.xaiAPIKey, voiceId: CloudConfig.voiceId)
+            if CloudConfig.listenMode != "always" {
                 cloud.voiceState = "idle"
+            } else if cloud.voiceState == "speak" {
+                cloud.voiceState = "listen"
             }
             if cloud.heardStatus == "在说" {
                 cloud.heardStatus = ""
@@ -746,16 +863,6 @@ struct ContentView: View {
             return ["type": "ack", "ok": true]
         default:
             return ["type": "ack", "ok": false, "error": "unknown command"]
-        }
-    }
-
-    private func expressionForDock(_ action: String) -> String {
-        switch action {
-        case "nod": return "nod"
-        case "shake": return "shake"
-        case "turn_left", "turn_right", "spin": return "look"
-        case "head_down": return "sleepy"
-        default: return "look"
         }
     }
 

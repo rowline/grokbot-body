@@ -15,7 +15,9 @@ enum DockVoice {
     static func interpret(_ raw: String) -> Result {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let n = normalize(trimmed)
-        guard !n.isEmpty else { return Result() }
+        guard !n.isEmpty else {
+            return Result(command: nil, forward: trimmed.isEmpty ? nil : trimmed)
+        }
         for (phrase, command) in rules {
             if n == phrase {
                 return Result(command: command, forward: nil)
