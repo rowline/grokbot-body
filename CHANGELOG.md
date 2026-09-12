@@ -17,6 +17,7 @@
 - **横屏字幕不再挡住按住说话**：听写原文收到左侧窄栏，文字不接点击；去掉会抢手势的滚动区。_by Rollin&Claude_
 - **重启 App 仍会开跟随**：手机已经吸在座上时，启动和回到前台会再检查并打开人脸追踪。_by Rollin&Claude_
 - **TestFlight build 16**：重启仍开跟随；横屏字幕不挡按住说话。_by Rollin&Claude_
+- **TestFlight build 17**：吸上云台不再闪退；转头没转就不报完成；跟随会自动开；绑定页能看到云台状态。_by Rollin&Claude_
 - **吸上云台开 app 就闪退**：`setAngularVelocity` 在系统人脸追踪开着时是 fatalError（「API violation: setting velocity only supported when system tracking disabled」），是 trap 不是抛错，`try?` 挡不住。开跟随的第一行就是它，而云台吸上时系统追踪本来就开着，于是必崩。所有动速度/动姿态的调用前都先确认追踪是关的，中途被打开就按「被打断」回报。_by Rollin&Claude_
 - **跟着人不自动开**：启动时 scenePhase 先于 boot() 变 active，DockKit 监听被建在相机跑起来之前，那条流收不到 docked，跟随就一直不开；重复 `restartListening` 还会把正要送达的 docked 事件取消掉。改成相机就绪才建流、5 秒内不重开流。绑定页把云台状态和 DockKit 明细显示出来，连不上时屏幕上能看见卡在哪一步。_by Rollin&Claude_
 - **支架没动就不再报「完成」**：动作开始前先取消排队中的「跟回去」——它会在动作执行到一半重新打开人脸追踪，云台立刻转回人脸，看上去就是没动。关不掉追踪、云台没回报执行完、动作被追踪覆盖，现在都按失败回给 Bot 和语音，不再拿「云台还吸着」当成功。`set_tracking` 同样等追踪真的打开才说好了。_by Rollin&Claude_
